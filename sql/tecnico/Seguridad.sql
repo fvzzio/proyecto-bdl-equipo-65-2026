@@ -1,15 +1,11 @@
+
 USE proyectoBDD2026;
 GO
 
-DROP ROLE IF EXISTS Rol_Vendedor;
-GO
 CREATE ROLE Rol_Vendedor;
-GO
-
-DROP ROLE IF EXISTS Rol_Auditor;
-GO
 CREATE ROLE Rol_Auditor;
 GO
+
 
 GRANT SELECT ON Producto TO Rol_Vendedor;
 GRANT SELECT ON Metodo_pago TO Rol_Vendedor;

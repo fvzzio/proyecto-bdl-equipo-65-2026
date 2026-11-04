@@ -68,36 +68,3 @@ BEGIN
     END
 END;
 GO
-
-SELECT * FROM Auditoria_Precios;
-SELECT * FROM Tipo_factura;
-GO
-
-CREATE OR ALTER FUNCTION dbo.fn_CalcularDescuentoCliente (@Id_cliente INT)
-RETURNS DECIMAL(5,2)
-AS
-BEGIN
-    DECLARE @TotalGastado DECIMAL(18,2);
-    DECLARE @Descuento DECIMAL(5,2) = 0.00;
-
-    SELECT @TotalGastado = ISNULL(SUM(p.importeTotal), 0)
-    FROM Venta_Factura vf
-    INNER JOIN pago p ON vf.Id_compra = p.Id_compra
-    WHERE vf.Id_cliente = @Id_cliente;
-
-    IF @TotalGastado >= 4000
-        SET @Descuento = 0.10;
-    ELSE IF @TotalGastado >= 2000
-        SET @Descuento = 0.05;
-    ELSE
-        SET @Descuento = 0.00;
-
-    RETURN @Descuento;
-END;
-GO
-
-SELECT 
-    Id_cliente, 
-    dbo.fn_CalcularDescuentoCliente(Id_cliente) AS PorcentajeDescuento
-FROM Cliente;
-GO
