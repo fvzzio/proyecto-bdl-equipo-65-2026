@@ -71,14 +71,6 @@ GO
 
 SELECT * FROM Auditoria_Precios;
 SELECT * FROM Tipo_factura;
-
-
-
-SELECT 
-    Id_cliente, 
-    dbo.fn_CalcularDescuentoCliente(Id_cliente) AS PorcentajeDescuento
-FROM Cliente;
-
 GO
 
 CREATE OR ALTER FUNCTION dbo.fn_CalcularDescuentoCliente (@Id_cliente INT)
@@ -108,3 +100,4 @@ SELECT
     Id_cliente, 
     dbo.fn_CalcularDescuentoCliente(Id_cliente) AS PorcentajeDescuento
 FROM Cliente;
+GO
