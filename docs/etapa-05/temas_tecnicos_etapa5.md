@@ -1,100 +1,71 @@
-# Etapa V: Implementación de Temas Técnicos
+# Temas tecnicos implementados en la Etapa 5
 
-En esta etapa incorporamos componentes avanzados del motor de base de datos (**Microsoft SQL Server**) sobre la base `proyectoBDD2026` (dominio de Comercio Minorista / Supermercado) para garantizar que la solución sea **robusta, consistente, segura, auditable y eficiente**.
+En esta etapa agregamos distintos mecanismos en SQL Server sobre nuestra base de datos `proyectoBDD2026` para que el sistema del supermercado sea mas seguro, rapido y no queden datos incompletos cuando se registra una venta.
 
-A continuación se describe cada tema técnico implementado, por qué fue elegido, cómo se integra al sistema y cómo se demuestra su funcionamiento.
+## Procedimiento almacenado y manejo de transacciones
 
----
+Para registrar una venta completa creamos el procedimiento almacenado `sp_RegistrarVentaCompleta`. En lugar de hacer los `INSERT` sueltos uno por uno desde afuera, el procedimiento recibe como parametros los datos del cliente, el empleado, el tipo de factura, el metodo de pago, el importe, el producto y la cantidad.
 
-## 1. Procedimientos y Funciones Almacenadas
+Adentro del procedimiento usamos una transaccion (`BEGIN TRANSACTION`) junto con un bloque `TRY...CATCH`:
+- Primero inserta la cabecera de la venta en `Venta_Factura`.
+- Con `SCOPE_IDENTITY()` guarda el ID de la compra que se acaba de generar.
+- Despues usa ese mismo ID para insertar los productos en `detalle_compra` y el cobro en la tabla `pago`.
+- Si las tres tablas se cargan bien, hace `COMMIT TRANSACTION` y confirma todo. Si llega a fallar algo en el medio, entra al `CATCH` y ejecuta `ROLLBACK TRANSACTION` para volver todo atras y que no quede una factura creada sin pago o sin detalle.
 
-### A. Procedimiento Almacenado: `sp_RegistrarVentaCompleta`
-* **¿Para qué se utiliza?**  
-  Encapsula en una única operación lógica todo el circuito de registración de una venta en caja: inserta el encabezado en `Venta_Factura`, recupera el identificador generado (`SCOPE_IDENTITY()`), registra el renglón del producto vendido en `detalle_compra` y asienta el cobro en la tabla `pago`.
-* **¿Por qué fue elegido y cómo se integra al sistema?**  
-  Evita que la aplicación cliente o el cajero tengan que ejecutar múltiples sentencias `INSERT` manuales por separado. Además, centraliza la lógica de negocio en el servidor y permite otorgar permisos de ejecución (`EXECUTE`) al rol vendedor sin exponer permisos de escritura directa sobre las tablas sensibles.
-* **Script de implementación:** [`sql/tecnico/etap5.sql`](../../sql/tecnico/etap5.sql)
+Para probarlo en `Etap5_2.sql` ejecutamos:
+```sql
+EXEC sp_RegistrarVentaCompleta 
+    @Id_cliente = 1, 
+    @Id_Empleado = 1, 
+    @Id_tipo_factura = 1, 
+    @Id_metodo = 1, 
+    @ImporteTotal = 4000, 
+    @Id_producto = 1, 
+    @Cantidad = 2;
+```
 
-### B. Función Almacenada Escalar: `dbo.fn_CalcularDescuentoCliente`
-* **¿Para qué se utiliza?**  
-  Recibe como parámetro el identificador de un cliente (`@Id_cliente`) y devuelve un porcentaje de descuento (`DECIMAL(5,2)`) calculado según el monto histórico acumulado de sus compras pagadas:
-  * Mayor o igual a `$4000`: **10% de descuento (`0.10`)**
-  * Mayor o igual a `$2000`: **5% de descuento (`0.05`)**
-  * Menor a `$2000` o sin compras: **0% de descuento (`0.00`)**
-* **¿Por qué fue elegida y cómo se integra al sistema?**  
-  Permite reutilizar el cálculo de fidelización directamente dentro de cualquier consulta `SELECT` o reporte sin duplicar fórmulas ni subconsultas complejas.
-* **Demostración de uso:**
-  ```sql
-  SELECT 
-      Id_cliente, 
-      Nombre,
-      Apellido,
-      dbo.fn_CalcularDescuentoCliente(Id_cliente) AS PorcentajeDescuento
-  FROM Cliente;
-  ```
+## Funcion almacenada para descuento de clientes
 
----
+Creamos la funcion `dbo.fn_CalcularDescuentoCliente` que recibe el `Id_cliente` y calcula que porcentaje de descuento le corresponde segun todo lo que llevo gastado en el negocio.
 
-## 2. Manejo de Transacciones
+La funcion suma el `importeTotal` de la tabla `pago` unida con `Venta_Factura` para ese cliente:
+- Si gasto 4000 o mas, devuelve `0.10` (10% de descuento).
+- Si gasto entre 2000 y 3999, devuelve `0.05` (5% de descuento).
+- Si gasto menos de 2000, devuelve `0.00`.
 
-* **¿Para qué se utiliza?**  
-  Dentro del procedimiento `sp_RegistrarVentaCompleta`, las tres inserciones (`Venta_Factura`, `detalle_compra` y `pago`) están envueltas en una transacción explícita (`BEGIN TRANSACTION` ... `COMMIT TRANSACTION`) controlada mediante un bloque `BEGIN TRY ... END TRY` y `BEGIN CATCH ... END CATCH`.
-* **¿Por qué fue elegido y cómo se integra al sistema?**  
-  Garantiza la propiedad de **Atomicidad (ACID)**: una venta nunca puede quedar registrada a medias (por ejemplo, una factura creada sin su detalle de productos o sin su registro de pago si ocurre un error de clave foránea o de tipo de datos). Si cualquiera de los tres pasos falla, el bloque `CATCH` ejecuta automáticamente `ROLLBACK TRANSACTION`, deshaciendo todos los cambios parciales y relanzando el error con `THROW`.
-* **Demostración de funcionamiento (`sql/tecnico/Etap5_2.sql`):**
-  ```sql
-  EXEC sp_RegistrarVentaCompleta 
-      @Id_cliente = 1, 
-      @Id_Empleado = 1, 
-      @Id_tipo_factura = 1, 
-      @Id_metodo = 1, 
-      @ImporteTotal = 4000, 
-      @Id_producto = 1, 
-      @Cantidad = 2;
-  ```
-  Al ejecutarse con datos válidos, el `COMMIT` confirma los registros en las 3 tablas simultáneamente. Si se invoca con un `@Id_metodo` inexistente, el `ROLLBACK` impide que quede una factura huérfana en `Venta_Factura`.
+Se demuestra consultando la tabla `Cliente`:
+```sql
+SELECT 
+    Id_cliente, 
+    dbo.fn_CalcularDescuentoCliente(Id_cliente) AS PorcentajeDescuento
+FROM Cliente;
+```
 
----
+## Trigger de auditoria de precios
 
-## 3. Triggers de Auditoría
+Como en un comercio los precios de los productos se actualizan seguido, armamos una tabla llamada `Auditoria_Precios` y el trigger `trg_AuditarCambioPrecioProducto` sobre la tabla `Producto`.
 
-* **¿Para qué se utiliza?**  
-  Se creó la tabla `Auditoria_Precios` y el trigger `trg_AuditarCambioPrecioProducto` (`AFTER UPDATE` sobre la tabla `Producto`). Cada vez que se modifica la columna `Precio_venta` de un artículo (`IF UPDATE(Precio_venta)`), el trigger toma automáticamente los valores de las tablas virtuales `DELETED` (precio anterior) e `INSERTED` (precio nuevo) y guarda un registro histórico con el `Id_producto`, ambos precios, la fecha y hora exacta (`GETDATE()`) y el usuario que realizó el cambio (`SYSTEM_USER`).
-* **¿Por qué fue elegido y cómo se integra al sistema?**  
-  En un supermercado los precios cambian con frecuencia por inflación o promociones. Este mecanismo asegura trazabilidad total y automática desde el motor de base de datos, impidiendo que un cambio de precio pase desapercibido incluso si se realiza fuera del sistema de gestión.
-* **Demostración de funcionamiento (`sql/tecnico/Etap5_2.sql`):**
-  ```sql
-  -- 1. Se actualiza el precio de venta del producto 1
-  UPDATE Producto SET Precio_venta = 2500 WHERE Id_producto = 1;
+El trigger se dispara automaticamente despues de un `UPDATE` (`AFTER UPDATE`). Con `IF UPDATE(Precio_venta)` revisa si se modifico el precio y guarda en `Auditoria_Precios` el ID del producto, el precio viejo (sacado de `DELETED`), el precio nuevo (sacado de `INSERTED`), la fecha con `GETDATE()` y el usuario que hizo el cambio (`SYSTEM_USER`).
 
-  -- 2. Se verifica el registro generado automáticamente por el trigger
-  SELECT * FROM Auditoria_Precios;
-  ```
+Para probar su funcionamiento hicimos un cambio de precio en el producto 1 y consultamos la tabla de auditoria:
+```sql
+UPDATE Producto SET Precio_venta = 2500 WHERE Id_producto = 1;
+SELECT * FROM Auditoria_Precios;
+```
 
----
+## Seguridad y roles de usuario
 
-## 4. Seguridad (Control de Acceso y Roles DCL)
+En el archivo `Seguridad.sql` separamos los permisos segun el rol que cumple cada persona en el sistema:
 
-* **¿Para qué se utiliza?**  
-  En el script [`sql/tecnico/Seguridad.sql`](../../sql/tecnico/Seguridad.sql) se implementa un esquema de seguridad basado en el **principio de menor privilegio** mediante dos roles de base de datos:
-  1. **`Rol_Vendedor`**:
-     * **Permisos otorgados (`GRANT`)**: Solo lectura (`SELECT`) sobre las tablas maestras necesarias para facturar (`Producto`, `Metodo_pago`, `Tipo_factura`, `Cliente`) y permiso de ejecución (`EXECUTE`) sobre el procedimiento `sp_RegistrarVentaCompleta`.
-     * **Restricciones explícitas (`DENY`)**: Prohibición explícita de borrar o modificar ventas históricas (`DENY DELETE, UPDATE ON Venta_Factura`) y prohibición total de alterar la tabla de auditoría (`DENY INSERT, UPDATE, DELETE ON Auditoria_Precios`).
-  2. **`Rol_Auditor`**:
-     * **Permisos otorgados (`GRANT`)**: Permiso exclusivo de consulta (`SELECT`) sobre las tablas transaccionales y de control (`Auditoria_Precios`, `Venta_Factura`, `detalle_compra` y `pago`) para tareas de supervisión contable sin posibilidad de modificar datos.
-* **¿Por qué fue elegido y cómo se integra al sistema?**  
-  Protege la integridad operativa y financiera del comercio: un cajero puede consultar catálogos y registrar nuevas ventas a través del procedimiento transaccional, pero no puede borrar facturas emitidas ni manipular el historial de auditoría de precios.
+- **Rol_Vendedor:** Le dimos permisos de lectura (`GRANT SELECT`) sobre las tablas que necesita consultar en caja (`Producto`, `Metodo_pago`, `Tipo_factura`, `Cliente`) y permiso con `GRANT EXECUTE` para usar el procedimiento `sp_RegistrarVentaCompleta`. Al mismo tiempo le bloqueamos con `DENY` la posibilidad de borrar o modificar ventas ya hechas en `Venta_Factura` y tambien le prohibimos insertar, editar o borrar registros en `Auditoria_Precios`.
+- **Rol_Auditor:** Le dimos unicamente permisos de lectura (`GRANT SELECT`) sobre `Auditoria_Precios`, `Venta_Factura`, `detalle_compra` y `pago` para que pueda revisar las ventas y los cambios de precios sin modificar los datos.
 
----
+## Indices para optimizacion de consultas
 
-## 5. Índices (Optimización de Consultas)
+En el archivo `optimizacionDatos.sql` agregamos cinco indices no agrupados (`NONCLUSTERED INDEX`) pensando en las consultas que hicimos en la Etapa 4:
 
-* **¿Para qué se utiliza?**  
-  En el script [`sql/tecnico/optimizacionDatos.sql`](../../sql/tecnico/optimizacionDatos.sql) se crearon 5 índices no agrupados (`NONCLUSTERED INDEX`) orientados a acelerar las consultas y reportes desarrollados en la Etapa IV:
-  1. `IX_VentaFactura_FechaHora` sobre `Venta_Factura (Fecha_hora)`: Optimiza los filtros por rango de fechas (`WHERE Fecha_hora BETWEEN ...`) utilizados en los reportes agregados de ventas mensuales y anuales.
-  2. `IX_DetalleCompra_Producto` sobre `detalle_compra (Id_producto)`: Acelera los `JOIN` entre el detalle de ventas y el catálogo de productos, además de las agrupaciones por producto.
-  3. `IX_DetalleCompra_Compra` sobre `detalle_compra (Id_compra)`: Como la clave primaria compuesta de `detalle_compra` es `(Id_producto, Id_compra)`, este índice secundario sobre `Id_compra` permite buscar de forma inmediata todos los renglones de una factura específica (`WHERE vf.Id_compra = 1`) sin recorrer toda la tabla (*Index Seek* en lugar de *Index Scan*).
-  4. `IX_Pago_Compra` sobre `pago (Id_compra)`: Acelera la unión entre cada factura y su pago correspondiente, ya que la PK compuesta de `pago` inicia por `Id_metodo`.
-  5. `IX_Producto_Categoria` sobre `Producto (Id_tipo_producto)`: Acelera el `JOIN` entre `Producto` y `Tipo_producto` en los reportes de recaudación por categoría.
-* **Demostración de funcionamiento:**  
-  Al ejecutar las consultas de la Etapa IV (Comprobante de Venta, Informe de Ventas por Fecha y Consulta Avanzada) activando `SET STATISTICS IO ON`, el optimizador de SQL Server utiliza operaciones de búsqueda por índice (`Index Seek`) sobre los índices creados en lugar de barridos completos de tabla (`Table/Index Scan`), reduciendo las lecturas lógicas de páginas de datos.
+- `IX_VentaFactura_FechaHora` en `Venta_Factura (Fecha_hora)`: para que busque mas rapido cuando filtramos ventas por rango de fechas en los reportes.
+- `IX_DetalleCompra_Producto` en `detalle_compra (Id_producto)`: para agilizar los `JOIN` con la tabla `Producto`.
+- `IX_DetalleCompra_Compra` en `detalle_compra (Id_compra)`: para encontrar rapido los renglones de una factura cuando armamos el comprobante de venta.
+- `IX_Pago_Compra` en `pago (Id_compra)`: para unir mas rapido cada venta con su pago.
+- `IX_Producto_Categoria` en `Producto (Id_tipo_producto)`: para acelerar los reportes agrupados por categoria de producto.
